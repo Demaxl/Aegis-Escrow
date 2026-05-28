@@ -1,0 +1,74 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aegis}
+      POSTGRES_USER: ${POSTGRES_USER:-aegis}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aegis_dev_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aegis} -d ${POSTGRES_DB:-aegis}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  anvil:
+    build:
+      context: .
+      dockerfile: docker/contracts.Dockerfile
+    ports:
+      - "8545:8545"
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://aegis:aegis_dev_password@postgres:5432/aegis
+      REDIS_URL: redis://redis:6379/0
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-dev-insecure-secret-key}
+      DJANGO_DEBUG: ${DJANGO_DEBUG:-true}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "python manage.py migrate &&
+             daphne -b 0.0.0.0 -p 8000 aegis.asgi:application"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+    env_file:
+      - .env
+    environment:
+      NUXT_PUBLIC_APP_NAME: ${NUXT_PUBLIC_APP_NAME:-Aegis Escrow}
+      NUXT_PUBLIC_RPC_URL: ${NUXT_PUBLIC_RPC_URL:-http://anvil:8545}
+      NUXT_PUBLIC_BACKEND_URL: ${NUXT_PUBLIC_BACKEND_URL:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+      - anvil
+
+volumes:
+  postgres_data:
